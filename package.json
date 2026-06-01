@@ -5,6 +5,7 @@
   "description": "Public frontend for Pickleball Motion Analyzer.",
   "scripts": {
     "build": "node scripts/prepare-vercel.js",
+    "prepare:hf": "node scripts/prepare-hf-space.js",
     "preview": "node scripts/prepare-vercel.js && npx serve dist"
   },
   "engines": {

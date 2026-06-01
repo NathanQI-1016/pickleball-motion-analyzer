@@ -128,6 +128,57 @@ PMA_API_BASE=https://pickleball-motion-analyzer-api.onrender.com
 
 注意：免费/低配云服务处理视频会比较慢，首次请求还可能因为下载 YOLO 权重而更慢。正式稳定使用建议使用付费实例或云服务器。
 
+## Free Backend Option: Hugging Face Spaces
+
+如果不想绑定信用卡，可以用 Hugging Face Spaces 免费部署后端。
+
+本仓库已包含 Hugging Face Spaces Docker 配置，位于：
+
+- `hf-space/`
+
+先运行：
+
+```powershell
+npm run prepare:hf
+```
+
+这会把后端需要的 `main.py`、`analyzer.py`、`requirements.txt` 复制到 `hf-space/`。
+
+部署步骤：
+
+1. 打开 https://huggingface.co
+2. 注册或登录账号。
+3. 点击头像 -> `New Space`
+4. Space name 填：
+
+```text
+pickleball-motion-analyzer-api
+```
+
+5. SDK 选择：
+
+```text
+Docker
+```
+
+6. Visibility 可先选 `Public`
+7. 创建后，把 `hf-space/` 文件夹中的内容推送到 Hugging Face Space 仓库，或在 Space 的 Files 页面上传这些文件。
+8. 构建完成后，后端地址类似：
+
+```text
+https://YOUR_USERNAME-pickleball-motion-analyzer-api.hf.space
+```
+
+9. 在 Vercel 项目里设置：
+
+```text
+PMA_API_BASE=https://YOUR_USERNAME-pickleball-motion-analyzer-api.hf.space
+```
+
+10. 重新部署 Vercel。
+
+免费 Space 会休眠，第一次请求会比较慢。建议测试视频控制在较短时长。
+
 ## API Contract
 
 前端会请求：
