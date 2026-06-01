@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: pickleball-motion-analyzer-api
+    env: docker
+    plan: starter
+    dockerfilePath: ./backend/Dockerfile
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: PYTHONUNBUFFERED
+        value: "1"

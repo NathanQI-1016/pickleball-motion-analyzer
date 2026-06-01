@@ -92,6 +92,42 @@ PMA_API_BASE=https://你的公网后端域名
 https://pickleball-motion-analyzer.vercel.app
 ```
 
+## Deploy Backend To Render
+
+当前 Python 后端已补充 Docker 部署配置：
+
+- `backend/Dockerfile`
+- `.dockerignore`
+- `render.yaml`
+
+Render 部署步骤：
+
+1. 把本项目推送到 GitHub。
+2. 打开 https://render.com
+3. 使用 GitHub 登录。
+4. 点击 `New +` -> `Blueprint`，选择本仓库。
+5. Render 会读取 `render.yaml` 并创建服务：
+
+```text
+pickleball-motion-analyzer-api
+```
+
+6. 部署成功后，Render 会给出公网地址，例如：
+
+```text
+https://pickleball-motion-analyzer-api.onrender.com
+```
+
+7. 在 Vercel 项目设置里添加环境变量：
+
+```text
+PMA_API_BASE=https://pickleball-motion-analyzer-api.onrender.com
+```
+
+8. 重新部署 Vercel 前端。
+
+注意：免费/低配云服务处理视频会比较慢，首次请求还可能因为下载 YOLO 权重而更慢。正式稳定使用建议使用付费实例或云服务器。
+
 ## API Contract
 
 前端会请求：

@@ -1,0 +1,14 @@
+.git
+.venv
+backend/.venv
+backend/uploads/*
+backend/outputs/*
+!backend/uploads/.gitkeep
+!backend/outputs/.gitkeep
+dist
+node_modules
+.vercel
+*.log
+__pycache__
+*.pyc
+yolov8n.pt
