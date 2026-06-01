@@ -1,0 +1,13 @@
+{
+  "name": "pickleball-motion-analyzer",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Public frontend for Pickleball Motion Analyzer.",
+  "scripts": {
+    "build": "node scripts/prepare-vercel.js",
+    "preview": "node scripts/prepare-vercel.js && npx serve dist"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
