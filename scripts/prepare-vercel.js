@@ -22,4 +22,4 @@ fs.writeFileSync(
 );
 
 console.log(`Built static frontend to ${distDir}`);
-console.log(apiBase ? `PMA_API_BASE=${apiBase}` : "PMA_API_BASE is not set. Upload analysis will be disabled until a public API is configured.");
+console.log(apiBase ? `PMA_API_BASE=${apiBase}` : "PMA_API_BASE is not set. Browser-only analysis mode will be used.");

@@ -1,5 +1,3 @@
-const API_BASE = (window.PMA_CONFIG && window.PMA_CONFIG.apiBase ? window.PMA_CONFIG.apiBase : "").replace(/\/$/, "");
-
 const fileInput = document.getElementById("videoFile");
 const dropZone = document.querySelector(".drop-zone");
 const fileName = document.getElementById("fileName");
@@ -18,9 +16,31 @@ const downloadCsv = document.getElementById("downloadCsv");
 const downloadBallCsv = document.getElementById("downloadBallCsv");
 
 let angleChart = null;
-let progressTimer = null;
+let poseLandmarker = null;
 
 const allowedExtensions = [".mp4", ".mov", ".avi"];
+const targetFps = 10;
+
+const L = {
+  leftShoulder: 11,
+  rightShoulder: 12,
+  leftElbow: 13,
+  rightElbow: 14,
+  leftWrist: 15,
+  rightWrist: 16,
+  leftHip: 23,
+  rightHip: 24,
+  leftKnee: 25,
+  rightKnee: 26,
+  leftAnkle: 27,
+  rightAnkle: 28,
+};
+
+const poseConnections = [
+  [11, 12], [11, 13], [13, 15], [12, 14], [14, 16],
+  [11, 23], [12, 24], [23, 24], [23, 25], [25, 27],
+  [24, 26], [26, 28],
+];
 
 fileInput.addEventListener("change", () => {
   setSelectedFile(fileInput.files[0]);
@@ -46,8 +66,7 @@ dropZone.addEventListener("drop", (event) => {
   const file = event.dataTransfer.files[0];
   if (!file) return;
 
-  const extension = getExtension(file.name);
-  if (!allowedExtensions.includes(extension)) {
+  if (!allowedExtensions.includes(getExtension(file.name))) {
     statusMessage.textContent = "仅支持 mp4、mov、avi 视频格式。";
     return;
   }
@@ -62,54 +81,28 @@ analyzeBtn.addEventListener("click", async () => {
   const file = fileInput.files[0];
   if (!file) return;
 
-  if (!API_BASE) {
-    statusMessage.textContent = "公网分析 API 尚未配置。请在 Vercel 环境变量 PMA_API_BASE 中填写后端 HTTPS 地址。";
-    return;
-  }
-
-  const formData = new FormData();
-  formData.append("file", file);
-
   setLoading(true);
-  startProgress();
+  updateProgress(3, "正在加载浏览器端姿态识别模型...");
 
   try {
-    const response = await fetch(`${API_BASE}/api/analyze`, {
-      method: "POST",
-      body: formData,
-    });
-
-    const payload = await response.json();
-    if (!response.ok) {
-      throw new Error(payload.detail || "分析失败，请检查视频格式或后端日志。");
-    }
-
-    finishProgress();
+    const payload = await analyzeInBrowser(file);
+    updateProgress(100, "分析完成");
     renderResults(payload);
-    statusMessage.textContent = "分析完成，结果已在网页中生成。";
+    statusMessage.textContent = "分析完成，所有处理均在浏览器中完成，视频没有上传到服务器。";
   } catch (error) {
-    stopProgress();
-    statusMessage.textContent = error.message;
+    statusMessage.textContent = `分析失败：${error.message}`;
   } finally {
     setLoading(false);
+    setTimeout(() => {
+      progressWrap.hidden = true;
+    }, 800);
   }
-});
-
-resultVideo.addEventListener("error", () => {
-  const currentSrc = resultVideo.currentSrc || resultVideo.src;
-  if (currentSrc.endsWith(".mp4")) {
-    resultVideo.src = currentSrc.replace(/\.mp4$/, ".webm");
-    resultVideo.load();
-    statusMessage.textContent = "正在切换到浏览器兼容的视频格式...";
-    return;
-  }
-  statusMessage.textContent = "分析视频已生成，但当前浏览器无法播放该编码。请重新分析一次，系统会生成 WebM 格式视频。";
 });
 
 function setSelectedFile(file) {
   fileName.textContent = file ? file.name : "尚未选择文件";
   analyzeBtn.disabled = !file;
-  statusMessage.textContent = file ? "视频已加入上传分析区域，可以开始分析。" : "";
+  statusMessage.textContent = file ? "视频已加入分析区域，可以开始分析。" : "";
 }
 
 function getExtension(name) {
@@ -123,53 +116,313 @@ function setLoading(isLoading) {
   progressWrap.hidden = !isLoading;
 }
 
-function startProgress() {
-  let value = 8;
-  updateProgress(value, "正在上传视频...");
-  clearInterval(progressTimer);
-  progressTimer = setInterval(() => {
-    value = Math.min(value + Math.random() * 7, 88);
-    const message =
-      value < 35
-        ? "正在识别姿态关键点..."
-        : value < 66
-          ? "正在计算关节角度..."
-          : "正在生成标注视频...";
-    updateProgress(value, message);
-  }, 700);
-}
-
-function stopProgress() {
-  clearInterval(progressTimer);
-  updateProgress(0, "分析未完成");
-  progressWrap.hidden = true;
-}
-
-function finishProgress() {
-  clearInterval(progressTimer);
-  updateProgress(100, "分析完成");
-  setTimeout(() => {
-    progressWrap.hidden = true;
-  }, 900);
-}
-
 function updateProgress(value, text) {
-  const rounded = Math.round(value);
+  const rounded = Math.max(0, Math.min(100, Math.round(value)));
   progressText.textContent = text;
   progressValue.textContent = `${rounded}%`;
   progressBar.style.width = `${rounded}%`;
 }
 
-function renderResults(data) {
-  const videoUrl = toAbsoluteUrl(data.video_url);
-  const csvUrl = toAbsoluteUrl(data.csv_url);
-  const ballCsvUrl = toAbsoluteUrl(data.ball_csv_url);
+async function loadPoseLandmarker() {
+  if (poseLandmarker) return poseLandmarker;
 
-  resultVideo.src = videoUrl;
+  const vision = await import("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/vision_bundle.mjs");
+  const fileset = await vision.FilesetResolver.forVisionTasks(
+    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/wasm"
+  );
+
+  poseLandmarker = await vision.PoseLandmarker.createFromOptions(fileset, {
+    baseOptions: {
+      modelAssetPath:
+        "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task",
+      delegate: "GPU",
+    },
+    runningMode: "VIDEO",
+    numPoses: 1,
+  });
+
+  return poseLandmarker;
+}
+
+async function analyzeInBrowser(file) {
+  const landmarker = await loadPoseLandmarker();
+  const video = document.createElement("video");
+  const objectUrl = URL.createObjectURL(file);
+  video.src = objectUrl;
+  video.muted = true;
+  video.playsInline = true;
+  video.crossOrigin = "anonymous";
+
+  await waitForVideoMetadata(video);
+
+  const width = video.videoWidth;
+  const height = video.videoHeight;
+  const duration = video.duration;
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+
+  const stream = canvas.captureStream(targetFps);
+  const recorder = new MediaRecorder(stream, { mimeType: "video/webm;codecs=vp8" });
+  const chunks = [];
+  recorder.ondataavailable = (event) => {
+    if (event.data.size) chunks.push(event.data);
+  };
+  recorder.start(250);
+
+  const frameData = [];
+  const ballData = [];
+  const ballTrail = [];
+  const totalFrames = Math.max(1, Math.floor(duration * targetFps));
+
+  for (let frameIndex = 0; frameIndex < totalFrames; frameIndex += 1) {
+    const time = frameIndex / targetFps;
+    await seekVideo(video, Math.min(time, Math.max(0, duration - 0.02)));
+
+    ctx.drawImage(video, 0, 0, width, height);
+    const timestampMs = Math.round(time * 1000);
+    const poseResult = landmarker.detectForVideo(video, timestampMs);
+    const landmarks = poseResult.landmarks && poseResult.landmarks[0] ? poseResult.landmarks[0] : null;
+
+    const row = buildFrameRow(frameIndex + 1, landmarks, width, height);
+    frameData.push(row);
+
+    if (landmarks) {
+      drawPose(ctx, landmarks, width, height);
+      drawAngleOverlay(ctx, row);
+    }
+
+    const ball = detectBrightBall(ctx, width, height);
+    if (ball) {
+      ballTrail.push(ball);
+      if (ballTrail.length > 50) ballTrail.shift();
+      ballData.push({ frame: frameIndex + 1, ball_x: ball.x, ball_y: ball.y });
+    }
+    drawBallTrail(ctx, ballTrail);
+    drawFrameNumber(ctx, frameIndex + 1);
+
+    updateProgress(8 + (frameIndex / totalFrames) * 90, "正在浏览器中分析视频...");
+    await sleep(1000 / targetFps);
+  }
+
+  recorder.stop();
+  await new Promise((resolve) => {
+    recorder.onstop = resolve;
+  });
+
+  URL.revokeObjectURL(objectUrl);
+
+  const videoBlob = new Blob(chunks, { type: "video/webm" });
+  const videoUrl = URL.createObjectURL(videoBlob);
+  const csvBlob = new Blob([toCsv(frameData)], { type: "text/csv;charset=utf-8" });
+  const ballCsvBlob = new Blob([toCsv(ballData)], { type: "text/csv;charset=utf-8" });
+
+  return {
+    video_url: videoUrl,
+    csv_url: URL.createObjectURL(csvBlob),
+    ball_csv_url: URL.createObjectURL(ballCsvBlob),
+    frame_data: frameData,
+    ball_data: ballData,
+  };
+}
+
+function waitForVideoMetadata(video) {
+  return new Promise((resolve, reject) => {
+    video.onloadedmetadata = resolve;
+    video.onerror = () => reject(new Error("视频无法读取，请换用 mp4 格式或较短视频。"));
+  });
+}
+
+function seekVideo(video, time) {
+  return new Promise((resolve) => {
+    const done = () => {
+      video.removeEventListener("seeked", done);
+      resolve();
+    };
+    video.addEventListener("seeked", done);
+    video.currentTime = time;
+  });
+}
+
+function calculateAngle(a, b, c) {
+  if (!a || !b || !c) return null;
+  const ba = { x: a.x - b.x, y: a.y - b.y };
+  const bc = { x: c.x - b.x, y: c.y - b.y };
+  const normBa = Math.hypot(ba.x, ba.y);
+  const normBc = Math.hypot(bc.x, bc.y);
+  if (!normBa || !normBc) return null;
+  const cosine = Math.max(-1, Math.min(1, (ba.x * bc.x + ba.y * bc.y) / (normBa * normBc)));
+  return (Math.acos(cosine) * 180) / Math.PI;
+}
+
+function point(landmarks, index, width, height) {
+  const lm = landmarks[index];
+  if (!lm || lm.visibility < 0.25) return null;
+  return { x: lm.x * width, y: lm.y * height };
+}
+
+function buildFrameRow(frame, landmarks, width, height) {
+  if (!landmarks) {
+    return {
+      frame,
+      right_elbow_angle: null,
+      left_elbow_angle: null,
+      right_knee_angle: null,
+      left_knee_angle: null,
+      right_hip_angle: null,
+      left_hip_angle: null,
+      right_shoulder_trunk_angle: null,
+      left_shoulder_trunk_angle: null,
+    };
+  }
+
+  const p = (id) => point(landmarks, id, width, height);
+  const rs = p(L.rightShoulder);
+  const re = p(L.rightElbow);
+  const rw = p(L.rightWrist);
+  const rh = p(L.rightHip);
+  const rk = p(L.rightKnee);
+  const ra = p(L.rightAnkle);
+  const ls = p(L.leftShoulder);
+  const le = p(L.leftElbow);
+  const lw = p(L.leftWrist);
+  const lh = p(L.leftHip);
+  const lk = p(L.leftKnee);
+  const la = p(L.leftAnkle);
+
+  return {
+    frame,
+    right_elbow_angle: calculateAngle(rs, re, rw),
+    left_elbow_angle: calculateAngle(ls, le, lw),
+    right_knee_angle: calculateAngle(rh, rk, ra),
+    left_knee_angle: calculateAngle(lh, lk, la),
+    right_hip_angle: calculateAngle(rs, rh, rk),
+    left_hip_angle: calculateAngle(ls, lh, lk),
+    right_shoulder_trunk_angle: calculateAngle(re, rs, rh),
+    left_shoulder_trunk_angle: calculateAngle(le, ls, lh),
+  };
+}
+
+function drawPose(ctx, landmarks, width, height) {
+  ctx.save();
+  ctx.lineWidth = 4;
+  ctx.strokeStyle = "#22d3ee";
+  ctx.fillStyle = "#a6d94a";
+
+  for (const [a, b] of poseConnections) {
+    const pa = point(landmarks, a, width, height);
+    const pb = point(landmarks, b, width, height);
+    if (!pa || !pb) continue;
+    ctx.beginPath();
+    ctx.moveTo(pa.x, pa.y);
+    ctx.lineTo(pb.x, pb.y);
+    ctx.stroke();
+  }
+
+  for (const index of Object.values(L)) {
+    const p = point(landmarks, index, width, height);
+    if (!p) continue;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  ctx.restore();
+}
+
+function drawAngleOverlay(ctx, row) {
+  const items = [
+    ["R Elbow", row.right_elbow_angle],
+    ["L Elbow", row.left_elbow_angle],
+    ["R Knee", row.right_knee_angle],
+    ["L Knee", row.left_knee_angle],
+    ["R Hip", row.right_hip_angle],
+    ["L Hip", row.left_hip_angle],
+  ];
+
+  ctx.save();
+  ctx.font = "24px Arial";
+  ctx.fillStyle = "rgba(5, 18, 34, 0.7)";
+  ctx.fillRect(24, 24, 270, 240);
+  ctx.fillStyle = "#ffffff";
+  items.forEach(([label, value], index) => {
+    ctx.fillText(`${label}: ${value == null ? "NA" : Math.round(value)}`, 44, 62 + index * 34);
+  });
+  ctx.restore();
+}
+
+function detectBrightBall(ctx, width, height) {
+  const sampleScale = 4;
+  const sampleWidth = Math.floor(width / sampleScale);
+  const sampleHeight = Math.floor(height / sampleScale);
+  const sampleCanvas = document.createElement("canvas");
+  sampleCanvas.width = sampleWidth;
+  sampleCanvas.height = sampleHeight;
+  const sampleCtx = sampleCanvas.getContext("2d", { willReadFrequently: true });
+  sampleCtx.drawImage(ctx.canvas, 0, 0, sampleWidth, sampleHeight);
+  const image = sampleCtx.getImageData(0, 0, sampleWidth, sampleHeight).data;
+
+  let sumX = 0;
+  let sumY = 0;
+  let count = 0;
+  for (let y = 0; y < sampleHeight; y += 1) {
+    for (let x = 0; x < sampleWidth; x += 1) {
+      const i = (y * sampleWidth + x) * 4;
+      const r = image[i];
+      const g = image[i + 1];
+      const b = image[i + 2];
+      if (r > 150 && g > 140 && b < 120 && Math.abs(r - g) < 90) {
+        sumX += x;
+        sumY += y;
+        count += 1;
+      }
+    }
+  }
+
+  if (count < 4 || count > 900) return null;
+  return {
+    x: Math.round((sumX / count) * sampleScale),
+    y: Math.round((sumY / count) * sampleScale),
+  };
+}
+
+function drawBallTrail(ctx, trail) {
+  if (!trail.length) return;
+  ctx.save();
+  ctx.strokeStyle = "#facc15";
+  ctx.fillStyle = "#ef4444";
+  ctx.lineWidth = 4;
+  ctx.beginPath();
+  trail.forEach((p, index) => {
+    if (index === 0) ctx.moveTo(p.x, p.y);
+    else ctx.lineTo(p.x, p.y);
+  });
+  ctx.stroke();
+  const last = trail[trail.length - 1];
+  ctx.beginPath();
+  ctx.arc(last.x, last.y, 8, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawFrameNumber(ctx, frame) {
+  ctx.save();
+  ctx.font = "24px Arial";
+  ctx.fillStyle = "#ffffff";
+  ctx.fillText(`Frame: ${frame}`, 44, 292);
+  ctx.restore();
+}
+
+function renderResults(data) {
+  resultVideo.src = data.video_url;
   resultVideo.load();
-  downloadVideo.href = videoUrl;
-  downloadCsv.href = csvUrl;
-  downloadBallCsv.href = ballCsvUrl;
+  downloadVideo.href = data.video_url;
+  downloadVideo.download = "annotated_video.webm";
+  downloadCsv.href = data.csv_url;
+  downloadCsv.download = "frame_kinematics_bilateral.csv";
+  downloadBallCsv.href = data.ball_csv_url;
+  downloadBallCsv.download = "ball_tracking.csv";
 
   renderChart(data.frame_data || []);
   renderTable(frameTable, data.frame_data || [], [
@@ -187,12 +440,6 @@ function renderResults(data) {
 
   results.hidden = false;
   results.scrollIntoView({ behavior: "smooth", block: "start" });
-}
-
-function toAbsoluteUrl(path) {
-  if (!path) return "";
-  if (path.startsWith("http")) return path;
-  return `${API_BASE}${path}`;
 }
 
 function renderChart(frameData) {
@@ -216,9 +463,7 @@ function renderChart(frameData) {
     spanGaps: true,
   }));
 
-  if (angleChart) {
-    angleChart.destroy();
-  }
+  if (angleChart) angleChart.destroy();
 
   angleChart = new Chart(ctx, {
     type: "line",
@@ -236,14 +481,8 @@ function renderChart(frameData) {
         },
       },
       scales: {
-        x: {
-          title: { display: true, text: "Frame" },
-          grid: { color: "rgba(16, 32, 51, 0.06)" },
-        },
-        y: {
-          title: { display: true, text: "Angle (degrees)" },
-          grid: { color: "rgba(16, 32, 51, 0.08)" },
-        },
+        x: { title: { display: true, text: "Frame" } },
+        y: { title: { display: true, text: "Angle (degrees)" } },
       },
     },
   });
@@ -260,15 +499,22 @@ function renderTable(container, rows, columns) {
   const body = visibleRows
     .map((row) => `<tr>${columns.map((column) => `<td>${formatValue(row[column])}</td>`).join("")}</tr>`)
     .join("");
-
-  const note =
-    rows.length > 100
-      ? `<caption>默认显示前 100 行，共 ${rows.length} 行。完整数据可下载 CSV。</caption>`
-      : "";
+  const note = rows.length > 100 ? `<caption>默认显示前 100 行，共 ${rows.length} 行。完整数据可下载 CSV。</caption>` : "";
   container.innerHTML = `<table>${note}<thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
 }
 
 function formatValue(value) {
   if (value === null || value === undefined || Number.isNaN(value)) return "";
   return typeof value === "number" ? value.toFixed(2) : value;
+}
+
+function toCsv(rows) {
+  if (!rows.length) return "";
+  const columns = Object.keys(rows[0]);
+  const body = rows.map((row) => columns.map((column) => row[column] ?? "").join(","));
+  return [columns.join(","), ...body].join("\n");
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

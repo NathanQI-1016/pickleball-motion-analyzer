@@ -2,34 +2,25 @@
 
 皮克球动作分析系统。当前仓库包含：
 
-- `frontend/`：官网首页、上传页面、结果视频、角度曲线和数据表格展示。
+- `frontend/`：官网首页、上传页面、浏览器端姿态识别、结果视频、角度曲线和数据表格展示。
 - `backend/`：FastAPI 视频分析服务，使用 OpenCV、MediaPipe Pose 和 YOLOv8。
 - `package.json` / `vercel.json`：用于把前端部署到 Vercel。
 
-## Important Deployment Note
+## Current Public Deployment Mode
 
-Vercel 适合托管这个项目的前端静态网站，但不适合直接运行当前 Python 视频分析后端。
-
-原因是视频分析后端依赖 OpenCV、MediaPipe、Ultralytics、Torch，并且需要上传和逐帧处理视频。Vercel Functions 有函数体积、上传请求体和执行时间限制；Vercel 官方文档也说明函数有最大持续时间限制和函数包体积限制。
-
-因此推荐架构是：
+当前公网版本采用纯前端浏览器分析模式：
 
 ```text
 Vercel HTTPS Frontend
         |
-        | PMA_API_BASE
         v
-Public HTTPS Python API
-FastAPI + OpenCV + MediaPipe + YOLO
+User Browser
+MediaPipe Web Pose + Canvas + Chart.js
 ```
 
-前端部署到 Vercel 后，必须配置环境变量：
+视频不会上传到服务器，分析在用户浏览器中完成。因此 Vercel 静态网站即可运行，不再强制依赖公网 Python 后端。
 
-```text
-PMA_API_BASE=https://your-public-api.example.com
-```
-
-如果暂时没有公网后端，网站仍可打开，但点击“开始分析”会提示公网分析 API 尚未配置。
+注意：浏览器端版本更适合演示和短视频。长视频会比较慢，并且球轨迹采用前端颜色检测的轻量方法，不如 Python YOLO 后端稳定。
 
 ## Vercel Static Frontend Build
 
