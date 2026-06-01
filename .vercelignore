@@ -1,0 +1,17 @@
+.git/
+.venv/
+backend/
+dist/
+node_modules/
+.vercel/
+*.log
+*.pyc
+__pycache__/
+yolov8n.pt
+rebuild_env_py311.bat
+setup_full_py311.bat
+start_server.bat
+start_server_debug.bat
+github_login.bat
+publish_github.bat
+deploy_vercel.bat
