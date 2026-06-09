@@ -19,7 +19,7 @@ let angleChart = null;
 let poseLandmarker = null;
 
 const allowedExtensions = [".mp4", ".mov", ".avi"];
-const targetFps = 10;
+const targetFps = 12;
 
 const L = {
   leftShoulder: 11,
@@ -126,16 +126,13 @@ function updateProgress(value, text) {
 async function loadPoseLandmarker() {
   if (poseLandmarker) return poseLandmarker;
 
-  const vision = await import("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/vision_bundle.mjs");
-  const fileset = await vision.FilesetResolver.forVisionTasks(
-    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/wasm"
-  );
+  const vision = await import("./vendor/vision_bundle.mjs");
+  const fileset = await vision.FilesetResolver.forVisionTasks("./vendor/wasm");
 
   poseLandmarker = await vision.PoseLandmarker.createFromOptions(fileset, {
     baseOptions: {
-      modelAssetPath:
-        "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task",
-      delegate: "GPU",
+      modelAssetPath: "./models/pose_landmarker_full.task",
+      delegate: "CPU",
     },
     runningMode: "VIDEO",
     numPoses: 1,

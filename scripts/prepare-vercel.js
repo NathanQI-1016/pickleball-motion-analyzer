@@ -12,8 +12,10 @@ fs.mkdirSync(distDir, { recursive: true });
 for (const entry of fs.readdirSync(frontendDir)) {
   const src = path.join(frontendDir, entry);
   const dest = path.join(distDir, entry);
-  fs.cpSync(src, dest, { recursive: true });
+  copyRecursive(src, dest);
 }
+
+copyMediaPipeVendor(distDir);
 
 fs.writeFileSync(
   path.join(distDir, "config.js"),
@@ -23,3 +25,27 @@ fs.writeFileSync(
 
 console.log(`Built static frontend to ${distDir}`);
 console.log(apiBase ? `PMA_API_BASE=${apiBase}` : "PMA_API_BASE is not set. Browser-only analysis mode will be used.");
+
+function copyMediaPipeVendor(outputDir) {
+  const packageDir = path.join(root, "node_modules", "@mediapipe", "tasks-vision");
+  const vendorDir = path.join(outputDir, "vendor");
+  const wasmDir = path.join(vendorDir, "wasm");
+
+  fs.mkdirSync(wasmDir, { recursive: true });
+  fs.copyFileSync(path.join(packageDir, "vision_bundle.mjs"), path.join(vendorDir, "vision_bundle.mjs"));
+  copyRecursive(path.join(packageDir, "wasm"), wasmDir);
+}
+
+function copyRecursive(src, dest) {
+  const stats = fs.statSync(src);
+  if (stats.isDirectory()) {
+    fs.mkdirSync(dest, { recursive: true });
+    for (const entry of fs.readdirSync(src)) {
+      copyRecursive(path.join(src, entry), path.join(dest, entry));
+    }
+    return;
+  }
+
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  fs.copyFileSync(src, dest);
+}
