@@ -15,6 +15,7 @@ for (const entry of fs.readdirSync(frontendDir)) {
 }
 
 copyMediaPipeVendor(docsDir);
+copyLegacyPoseVendor(docsDir);
 
 fs.writeFileSync(path.join(docsDir, ".nojekyll"), "", "utf8");
 fs.writeFileSync(
@@ -33,6 +34,24 @@ function copyMediaPipeVendor(outputDir) {
   fs.mkdirSync(wasmDir, { recursive: true });
   fs.copyFileSync(path.join(packageDir, "vision_bundle.mjs"), path.join(vendorDir, "vision_bundle.mjs"));
   copyRecursive(path.join(packageDir, "wasm"), wasmDir);
+}
+
+function copyLegacyPoseVendor(outputDir) {
+  const packageDir = path.join(root, "node_modules", "@mediapipe", "pose");
+  const poseDir = path.join(outputDir, "vendor", "pose");
+  fs.mkdirSync(poseDir, { recursive: true });
+
+  for (const entry of fs.readdirSync(packageDir)) {
+    if (
+      entry.endsWith(".js") ||
+      entry.endsWith(".wasm") ||
+      entry.endsWith(".tflite") ||
+      entry.endsWith(".binarypb") ||
+      entry.endsWith(".data")
+    ) {
+      fs.copyFileSync(path.join(packageDir, entry), path.join(poseDir, entry));
+    }
+  }
 }
 
 function copyRecursive(src, dest) {

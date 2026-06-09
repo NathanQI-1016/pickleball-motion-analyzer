@@ -16,7 +16,7 @@ const downloadCsv = document.getElementById("downloadCsv");
 const downloadBallCsv = document.getElementById("downloadBallCsv");
 
 let angleChart = null;
-let poseLandmarker = null;
+let poseDetector = null;
 
 const allowedExtensions = [".mp4", ".mov", ".avi"];
 const targetFps = 12;
@@ -123,13 +123,26 @@ function updateProgress(value, text) {
   progressBar.style.width = `${rounded}%`;
 }
 
-async function loadPoseLandmarker() {
-  if (poseLandmarker) return poseLandmarker;
+async function loadPoseDetector() {
+  if (poseDetector) return poseDetector;
 
   updateProgress(4, "正在检查本地模型文件...");
+  await withTimeout(checkAsset("./vendor/pose/pose.js"), 20000, "姿态识别脚本加载超时");
+
+  try {
+    poseDetector = await withTimeout(loadTasksPoseDetector(), 35000, "新版模型初始化超时");
+    return poseDetector;
+  } catch (error) {
+    console.warn("Tasks Vision failed, falling back to Legacy Pose:", error);
+    updateProgress(15, "新版模型加载较慢，正在切换兼容模式...");
+    poseDetector = await withTimeout(loadLegacyPoseDetector(), 45000, "兼容模式初始化超时");
+    return poseDetector;
+  }
+}
+
+async function loadTasksPoseDetector() {
   await withTimeout(checkAsset("./models/pose_landmarker_lite.task"), 20000, "模型文件加载超时");
   await withTimeout(checkAsset("./vendor/wasm/vision_wasm_internal.wasm"), 20000, "WASM 文件加载超时");
-
   updateProgress(8, "正在载入 MediaPipe 运行库...");
   const vision = await withTimeout(import("./vendor/vision_bundle.mjs"), 30000, "MediaPipe 运行库加载超时");
 
@@ -140,9 +153,14 @@ async function loadPoseLandmarker() {
     "MediaPipe WASM 初始化超时"
   );
 
-  poseLandmarker = await createPoseLandmarker(vision, fileset, "./models/pose_landmarker_lite.task");
-
-  return poseLandmarker;
+  const landmarker = await createPoseLandmarker(vision, fileset, "./models/pose_landmarker_lite.task");
+  return {
+    mode: "tasks",
+    detect(video, timestampMs) {
+      const result = landmarker.detectForVideo(video, timestampMs);
+      return result.landmarks && result.landmarks[0] ? result.landmarks[0] : null;
+    },
+  };
 }
 
 async function createPoseLandmarker(vision, fileset, modelPath) {
@@ -168,6 +186,82 @@ async function createPoseLandmarker(vision, fileset, modelPath) {
   }
 }
 
+async function loadLegacyPoseDetector() {
+  updateProgress(18, "正在载入兼容姿态识别模块...");
+  await loadScript("./vendor/pose/pose.js");
+
+  const pose = new window.Pose({
+    locateFile: (file) => `./vendor/pose/${file}`,
+  });
+
+  pose.setOptions({
+    modelComplexity: 1,
+    smoothLandmarks: true,
+    enableSegmentation: false,
+    smoothSegmentation: false,
+    minDetectionConfidence: 0.5,
+    minTrackingConfidence: 0.5,
+  });
+
+  let pendingResolve = null;
+  pose.onResults((result) => {
+    if (pendingResolve) {
+      const resolve = pendingResolve;
+      pendingResolve = null;
+      resolve(result.poseLandmarks || null);
+    }
+  });
+
+  await detectLegacyFrame(pose, document.createElement("canvas"), () => pendingResolve, (value) => {
+    pendingResolve = value;
+  });
+
+  return {
+    mode: "legacy",
+    detect(video) {
+      return detectLegacyFrame(pose, video, () => pendingResolve, (value) => {
+        pendingResolve = value;
+      });
+    },
+  };
+}
+
+function detectLegacyFrame(pose, image, getPending, setPending) {
+  return new Promise((resolve, reject) => {
+    if (getPending()) {
+      reject(new Error("上一帧仍在处理中"));
+      return;
+    }
+    const timeoutId = setTimeout(() => {
+      setPending(null);
+      reject(new Error("兼容模式单帧检测超时"));
+    }, 10000);
+    setPending((result) => {
+      clearTimeout(timeoutId);
+      resolve(result);
+    });
+    pose.send({ image }).catch((error) => {
+      clearTimeout(timeoutId);
+      setPending(null);
+      reject(error);
+    });
+  });
+}
+
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    if (document.querySelector(`script[src="${src}"]`)) {
+      resolve();
+      return;
+    }
+    const script = document.createElement("script");
+    script.src = src;
+    script.onload = resolve;
+    script.onerror = () => reject(new Error(`脚本加载失败：${src}`));
+    document.head.appendChild(script);
+  });
+}
+
 async function checkAsset(url) {
   const response = await fetch(url, { cache: "force-cache" });
   if (!response.ok) {
@@ -185,7 +279,7 @@ function withTimeout(promise, ms, message) {
 }
 
 async function analyzeInBrowser(file) {
-  const landmarker = await loadPoseLandmarker();
+  const detector = await loadPoseDetector();
   const video = document.createElement("video");
   const objectUrl = URL.createObjectURL(file);
   video.src = objectUrl;
@@ -222,8 +316,7 @@ async function analyzeInBrowser(file) {
 
     ctx.drawImage(video, 0, 0, width, height);
     const timestampMs = Math.round(time * 1000);
-    const poseResult = landmarker.detectForVideo(video, timestampMs);
-    const landmarks = poseResult.landmarks && poseResult.landmarks[0] ? poseResult.landmarks[0] : null;
+    const landmarks = await detector.detect(video, timestampMs);
 
     const row = buildFrameRow(frameIndex + 1, landmarks, width, height);
     frameData.push(row);
