@@ -126,19 +126,62 @@ function updateProgress(value, text) {
 async function loadPoseLandmarker() {
   if (poseLandmarker) return poseLandmarker;
 
-  const vision = await import("./vendor/vision_bundle.mjs");
-  const fileset = await vision.FilesetResolver.forVisionTasks("./vendor/wasm");
+  updateProgress(4, "正在检查本地模型文件...");
+  await withTimeout(checkAsset("./models/pose_landmarker_lite.task"), 20000, "模型文件加载超时");
+  await withTimeout(checkAsset("./vendor/wasm/vision_wasm_internal.wasm"), 20000, "WASM 文件加载超时");
 
-  poseLandmarker = await vision.PoseLandmarker.createFromOptions(fileset, {
-    baseOptions: {
-      modelAssetPath: "./models/pose_landmarker_full.task",
-      delegate: "CPU",
-    },
-    runningMode: "VIDEO",
-    numPoses: 1,
-  });
+  updateProgress(8, "正在载入 MediaPipe 运行库...");
+  const vision = await withTimeout(import("./vendor/vision_bundle.mjs"), 30000, "MediaPipe 运行库加载超时");
+
+  updateProgress(12, "正在初始化姿态识别模型...");
+  const fileset = await withTimeout(
+    vision.FilesetResolver.forVisionTasks(new URL("./vendor/wasm", window.location.href).href),
+    30000,
+    "MediaPipe WASM 初始化超时"
+  );
+
+  poseLandmarker = await createPoseLandmarker(vision, fileset, "./models/pose_landmarker_lite.task");
 
   return poseLandmarker;
+}
+
+async function createPoseLandmarker(vision, fileset, modelPath) {
+  try {
+    return await withTimeout(
+      vision.PoseLandmarker.createFromOptions(fileset, {
+        baseOptions: {
+          modelAssetPath: modelPath,
+          delegate: "CPU",
+        },
+        runningMode: "VIDEO",
+        numPoses: 1,
+      }),
+      60000,
+      "姿态识别模型初始化超时"
+    );
+  } catch (error) {
+    if (modelPath.includes("lite")) {
+      updateProgress(12, "轻量模型初始化失败，正在尝试高精度模型...");
+      return createPoseLandmarker(vision, fileset, "./models/pose_landmarker_full.task");
+    }
+    throw error;
+  }
+}
+
+async function checkAsset(url) {
+  const response = await fetch(url, { cache: "force-cache" });
+  if (!response.ok) {
+    throw new Error(`资源加载失败：${url}`);
+  }
+}
+
+function withTimeout(promise, ms, message) {
+  let timeoutId;
+  const timeout = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error(message)), ms);
+  });
+
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timeoutId));
 }
 
 async function analyzeInBrowser(file) {
